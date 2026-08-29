@@ -201,22 +201,28 @@ fn check_zero_sized_elements(comptime inline_capacity: usize) !void {
     var failing_state = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
     const allocator = failing_state.allocator();
     var list: SegmentedList(Empty, inline_capacity) = .empty;
-    defer list.deinit(allocator);
+    errdefer list.deinit(allocator);
 
     const items = [_]Empty{ .{}, .{}, .{} };
     try list.appendSlice(allocator, &items);
     list.appendSliceAssumeCapacity(&items);
     try testing.expectEqual(@as(usize, 6), list.len);
 
-    var iterator = list.constIterator(list.len);
+    const first = list.at(0);
+    var moved_list = list;
+    list = .empty;
+    defer moved_list.deinit(allocator);
+    try testing.expectEqual(@intFromPtr(first), @intFromPtr(moved_list.at(0)));
+
+    var iterator = moved_list.constIterator(moved_list.len);
     var iterated_count: usize = 0;
     while (iterator.prev()) |_| iterated_count += 1;
-    try testing.expectEqual(list.len, iterated_count);
+    try testing.expectEqual(moved_list.len, iterated_count);
 
-    try list.resize(allocator, std.math.maxInt(usize));
-    try testing.expectEqual(std.math.maxInt(usize), list.capacity());
-    _ = list.at(std.math.maxInt(usize) - 1);
-    try testing.expectError(error.OutOfMemory, list.addOne(allocator));
+    try moved_list.resize(allocator, std.math.maxInt(usize));
+    try testing.expectEqual(std.math.maxInt(usize), moved_list.capacity());
+    _ = moved_list.at(std.math.maxInt(usize) - 1);
+    try testing.expectError(error.OutOfMemory, moved_list.addOne(allocator));
     try testing.expect(!failing_state.has_induced_failure);
 }
 
