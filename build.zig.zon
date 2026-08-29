@@ -1,0 +1,16 @@
+.{
+    .name = .segmented_list,
+    .version = "1.0.0",
+    .fingerprint = 0x8db283d4c12645d5,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "benchmark",
+        "src",
+        "test",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+    },
+}
