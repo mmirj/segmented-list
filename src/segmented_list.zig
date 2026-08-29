@@ -42,7 +42,6 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
         inline_items: [inline_capacity_value]T = undefined,
         segment_directory: [][*]T = &.{},
         segment_count: usize = 0,
-        zero_sized_item: [if (@sizeOf(T) == 0) 1 else 0]T = undefined,
 
         /// The number of items in the list.
         /// Modify only through the list operations.
@@ -440,7 +439,7 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
 
         // Requires `index < capacity()`.
         fn unchecked_at(self: anytype, index: usize) ElementPointer(@TypeOf(self)) {
-            if (@sizeOf(T) == 0) return &self.zero_sized_item[0];
+            if (@sizeOf(T) == 0) return zero_sized_item_pointer(ElementPointer(@TypeOf(self)));
             if (index < inline_capacity_value) return &self.inline_items[index];
 
             const location = segment_location(index);
@@ -464,6 +463,11 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
         fn ElementSlice(comptime SelfPointer: type) type {
             const pointer_info = @typeInfo(SelfPointer).pointer;
             return if (pointer_info.is_const) []const T else []T;
+        }
+
+        fn zero_sized_item_pointer(comptime ItemPointer: type) ItemPointer {
+            const address = comptime std.mem.alignBackward(usize, std.math.maxInt(usize), @alignOf(T));
+            return @ptrFromInt(address);
         }
 
         fn BaseIterator(comptime ListPointer: type, comptime ItemPointer: type) type {
@@ -498,7 +502,7 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
                     if (self.index >= self.list.len) return null;
                     if (@sizeOf(T) == 0) {
                         self.index += 1;
-                        return &self.list.zero_sized_item[0];
+                        return zero_sized_item_pointer(ItemPointer);
                     }
                     if (self.index < inline_capacity_value) {
                         const item_pointer = &self.list.inline_items[self.index];
@@ -521,7 +525,7 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
                 pub fn prev(self: *@This()) ?ItemPointer {
                     if (self.index == 0) return null;
                     self.index -= 1;
-                    if (@sizeOf(T) == 0) return &self.list.zero_sized_item[0];
+                    if (@sizeOf(T) == 0) return zero_sized_item_pointer(ItemPointer);
                     if (self.index < inline_capacity_value) {
                         return &self.list.inline_items[self.index];
                     }
