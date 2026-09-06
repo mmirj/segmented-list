@@ -28,16 +28,15 @@ pub fn main(init: std.process.Init) !void {
 
     try warm_up(gpa);
 
-    var total_ns = [_]u128{0} ** implementations.len;
+    var total_ns: [implementations.len]u128 = @splat(0);
     for (0..repetition_count) |repetition| {
         var checksums: [implementations.len]u64 = undefined;
         for (0..implementations.len) |offset| {
             const order_index = (repetition + offset) % implementations.len;
             const implementation = implementations[order_index];
             const sample = try measure(io, gpa, implementation, element_count);
-            const implementation_index = @intFromEnum(implementation);
-            checksums[implementation_index] = sample.checksum;
-            total_ns[implementation_index] += sample.duration_ns;
+            checksums[order_index] = sample.checksum;
+            total_ns[order_index] += sample.duration_ns;
         }
         try validate_checksums(checksums);
     }
@@ -47,16 +46,16 @@ pub fn main(init: std.process.Init) !void {
             "append + indexed scan + release; SegmentedList inline capacity 0\n\n",
         .{ @tagName(builtin.mode), element_count, repetition_count },
     );
-    for (implementations) |implementation| {
-        try write_result(stdout, implementation, total_ns[@intFromEnum(implementation)]);
+    for (implementations, 0..) |implementation, implementation_index| {
+        try write_result(stdout, implementation, total_ns[implementation_index]);
     }
     try stdout.flush();
 }
 
 fn warm_up(allocator: std.mem.Allocator) !void {
     var checksums: [implementations.len]u64 = undefined;
-    for (implementations) |implementation| {
-        checksums[@intFromEnum(implementation)] = try run(
+    for (implementations, 0..) |implementation, implementation_index| {
+        checksums[implementation_index] = try run(
             allocator,
             implementation,
             element_count,

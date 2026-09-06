@@ -457,12 +457,15 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
 
         fn ElementPointer(comptime SelfPointer: type) type {
             const pointer_info = @typeInfo(SelfPointer).pointer;
-            return if (pointer_info.is_const) *const T else *T;
+            const is_const = if (@hasField(@TypeOf(pointer_info), "attrs"))
+                pointer_info.attrs.@"const"
+            else
+                pointer_info.is_const;
+            return if (is_const) *const T else *T;
         }
 
         fn ElementSlice(comptime SelfPointer: type) type {
-            const pointer_info = @typeInfo(SelfPointer).pointer;
-            return if (pointer_info.is_const) []const T else []T;
+            return if (ElementPointer(SelfPointer) == *const T) []const T else []T;
         }
 
         fn zero_sized_item_pointer(comptime ItemPointer: type) ItemPointer {
