@@ -9,7 +9,7 @@ Elements are not guaranteed to be contiguous, so for that, use `std.ArrayList` i
 Add the package:
 
 ```sh
-zig fetch --save git+https://github.com/mmirj/segmented-list#v1.0.0
+zig fetch --save git+https://github.com/mmirj/segmented-list#v1.1.0
 ```
 
 In `build.zig`, add `b.dependency("segmented_list", .{}).module("segmented_list")` as the `segmented_list` import of each module that uses it.
