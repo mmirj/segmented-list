@@ -483,7 +483,8 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
                     var segment_index: usize = 0;
                     var item_index: usize = 0;
                     if (@sizeOf(T) != 0 and index >= inline_capacity_value) {
-                        if (index == list.capacity()) {
+                        // `segment_location` cannot represent the end of the last possible segment.
+                        if (index - inline_capacity_value == dynamic_capacity_max) {
                             segment_index = list.segment_count;
                         } else {
                             const location = segment_location(index);
