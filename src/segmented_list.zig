@@ -33,11 +33,21 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
     return struct {
         const Self = @This();
         const usize_bit_count: usize = @bitSizeOf(usize);
-        const inline_exponent: usize = if (inline_capacity_value == 0)
-            0
+        // Sized like the initial capacity of `std.ArrayList`, rounded to a power of two.
+        const cache_line_item_count: usize = if (@sizeOf(T) == 0)
+            1
         else
-            @intCast(std.math.log2_int(usize, inline_capacity_value));
-        const segment_count_max = usize_bit_count - inline_exponent;
+            std.math.floorPowerOfTwo(usize, @max(1, std.atomic.cache_line / @sizeOf(T)));
+        const first_segment_size: usize = @max(inline_capacity_value, cache_line_item_count);
+        const first_segment_exponent: usize = std.math.log2_int(usize, first_segment_size);
+        const segment_count_max = usize_bit_count - first_segment_exponent;
+        // All possible dynamic segments together hold 2^usize_bit_count - first_segment_size items.
+        const dynamic_capacity_max: usize = std.math.maxInt(usize) - first_segment_size + 1;
+        const capacity_max: usize = std.math.add(
+            usize,
+            inline_capacity_value,
+            dynamic_capacity_max,
+        ) catch std.math.maxInt(usize);
 
         inline_items: [inline_capacity_value]T = undefined,
         segment_directory: [][*]T = &.{},
@@ -74,15 +84,11 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
             if (@sizeOf(T) == 0) return std.math.maxInt(usize);
             assert(self.segment_count <= segment_count_max);
 
-            if (self.segment_count == segment_count_max) {
-                return std.math.maxInt(usize);
-            }
-            if (inline_capacity_value == 0) {
-                const capacity_plus_one: usize = @as(usize, 1) <<
-                    @intCast(self.segment_count);
-                return capacity_plus_one - 1;
-            }
-            return inline_capacity_value << @intCast(self.segment_count);
+            if (self.segment_count == segment_count_max) return capacity_max;
+
+            const dynamic_capacity = (first_segment_size << @intCast(self.segment_count)) -
+                first_segment_size;
+            return inline_capacity_value + dynamic_capacity;
         }
 
         /// Modify the list so that it can hold at least `minimum` items.
@@ -94,6 +100,7 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
             minimum: usize,
         ) Allocator.Error!void {
             if (minimum <= self.capacity()) return;
+            if (minimum > capacity_max) return error.OutOfMemory;
             try self.grow_segments(allocator, segment_count_for_minimum(minimum));
         }
 
@@ -389,6 +396,7 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
 
         fn segment_count_for_minimum(minimum: usize) usize {
             if (@sizeOf(T) == 0 or minimum <= inline_capacity_value) return 0;
+            assert(minimum <= capacity_max);
 
             var element_capacity: usize = inline_capacity_value;
             var required_segment_count: usize = 0;
@@ -409,10 +417,6 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
 
         fn segment_size(segment_index: usize) usize {
             assert(segment_index < segment_count_max);
-            const first_segment_size: usize = if (inline_capacity_value == 0)
-                1
-            else
-                inline_capacity_value;
             return first_segment_size << @intCast(segment_index);
         }
 
@@ -424,17 +428,12 @@ pub fn SegmentedList(comptime T: type, comptime inline_capacity_value: usize) ty
 
         fn segment_location(index: usize) Location {
             assert(index >= inline_capacity_value);
-            if (inline_capacity_value == 0) {
-                const adjusted_index = index + 1;
-                const segment_index: usize = @intCast(std.math.log2_int(usize, adjusted_index));
-                const segment_start = (@as(usize, 1) << @intCast(segment_index)) - 1;
-                return .{ .segment_index = segment_index, .item_index = index - segment_start };
-            }
-
-            const segment_index = @as(usize, @intCast(std.math.log2_int(usize, index))) -
-                inline_exponent;
-            const segment_start = inline_capacity_value << @intCast(segment_index);
-            return .{ .segment_index = segment_index, .item_index = index - segment_start };
+            // With this offset, dynamic segment `n` starts at `first_segment_size << n`.
+            const offset_index = index - inline_capacity_value + first_segment_size;
+            const segment_index = @as(usize, std.math.log2_int(usize, offset_index)) -
+                first_segment_exponent;
+            const segment_start = first_segment_size << @intCast(segment_index);
+            return .{ .segment_index = segment_index, .item_index = offset_index - segment_start };
         }
 
         // Requires `index < capacity()`.

@@ -3,39 +3,53 @@ const SegmentedList = @import("segmented_list").SegmentedList;
 const testing = std.testing;
 
 test "capacity and indexing" {
-    inline for (.{ 0, 1, 2, 4, 8, 16 }) |inline_capacity| {
-        try check_geometry(inline_capacity);
+    inline for (.{ [1]u16, [128]u16 }) |Item| {
+        inline for (.{ 0, 1, 2, 4, 8, 16, 128 }) |inline_capacity| {
+            try check_geometry(Item, inline_capacity);
+        }
     }
 }
 
-fn check_geometry(comptime inline_capacity: usize) !void {
-    var list: SegmentedList(u16, inline_capacity) = .empty;
+fn check_geometry(comptime Item: type, comptime inline_capacity: usize) !void {
+    var list: SegmentedList(Item, inline_capacity) = .empty;
     defer list.deinit(testing.allocator);
 
     try testing.expectEqual(inline_capacity, list.capacity());
     var previous_capacity = list.capacity();
-    for (0..129) |index| {
-        try list.append(testing.allocator, @intCast(index));
-        const expected_capacity = capacity_for_minimum(inline_capacity, list.len);
+    for (0..257) |index| {
+        var item: Item = undefined;
+        item[0] = @intCast(index);
+        try list.append(testing.allocator, item);
+        const expected_capacity = capacity_for_minimum(Item, inline_capacity, list.len);
         try testing.expectEqual(expected_capacity, list.capacity());
         if (list.capacity() != previous_capacity) {
-            try testing.expect(list.capacity() < (2 * list.len));
+            const capacity_limit = (2 * list.len) + first_segment_size(Item, inline_capacity);
+            try testing.expect(list.capacity() < capacity_limit);
             previous_capacity = list.capacity();
         }
         for (0..list.len) |item_index| {
-            try testing.expectEqual(@as(u16, @intCast(item_index)), list.at(item_index).*);
+            try testing.expectEqual(@as(u16, @intCast(item_index)), list.at(item_index)[0]);
         }
     }
 }
 
-fn capacity_for_minimum(comptime inline_capacity: usize, minimum: usize) usize {
+fn capacity_for_minimum(
+    comptime Item: type,
+    comptime inline_capacity: usize,
+    minimum: usize,
+) usize {
     var element_capacity: usize = inline_capacity;
-    var next_segment_size: usize = if (inline_capacity == 0) 1 else inline_capacity;
+    var next_segment_size = first_segment_size(Item, inline_capacity);
     while (element_capacity < minimum) {
         element_capacity += next_segment_size;
         next_segment_size *= 2;
     }
     return element_capacity;
+}
+
+fn first_segment_size(comptime Item: type, comptime inline_capacity: usize) usize {
+    const cache_line_item_count = @max(1, std.atomic.cache_line / @sizeOf(Item));
+    return @max(inline_capacity, std.math.floorPowerOfTwo(usize, cache_line_item_count));
 }
 
 test "basic usage" {
@@ -44,7 +58,7 @@ test "basic usage" {
     defer list.deinit(testing.allocator);
 
     try list.ensureTotalCapacity(testing.allocator, 19);
-    try testing.expectEqual(@as(usize, 32), list.capacity());
+    try testing.expectEqual(capacity_for_minimum(u32, 4, 19), list.capacity());
     list.appendAssumeCapacity(0);
     list.appendSliceAssumeCapacity(&.{ 1, 2, 3, 4, 5, 6, 7 });
 
@@ -95,8 +109,8 @@ test "clearAndFree with inline capacity 0" {
 }
 
 test "iterators" {
-    try check_iterator_boundaries(0, 15);
-    try check_iterator_boundaries(2, 16);
+    try check_iterator_boundaries(0);
+    try check_iterator_boundaries(2);
 
     var list: SegmentedList(u32, 2) = .empty;
     defer list.deinit(testing.allocator);
@@ -125,9 +139,11 @@ test "iterators" {
     try testing.expectEqual(@as(?*const u32, null), const_iterator.prev());
 }
 
-fn check_iterator_boundaries(comptime inline_capacity: usize, length: usize) !void {
+fn check_iterator_boundaries(comptime inline_capacity: usize) !void {
     var list: SegmentedList(u32, inline_capacity) = .empty;
     defer list.deinit(testing.allocator);
+    // Inline storage followed by three full dynamic segments.
+    const length = inline_capacity + (7 * first_segment_size(u32, inline_capacity));
     for (0..length) |index| try list.append(testing.allocator, @intCast(index));
     try testing.expectEqual(length, list.capacity());
 
@@ -172,7 +188,7 @@ fn check_pointer_stability(comptime inline_capacity: usize) !void {
     }
 
     list.shrinkAndFree(testing.allocator, 17);
-    try testing.expectEqual(capacity_for_minimum(inline_capacity, 17), list.capacity());
+    try testing.expectEqual(capacity_for_minimum(u64, inline_capacity, 17), list.capacity());
     for (0..list.len) |index| {
         try testing.expectEqual(@intFromPtr(pointers[index]), @intFromPtr(list.at(index)));
     }
@@ -226,7 +242,7 @@ fn check_zero_sized_elements(comptime inline_capacity: usize) !void {
     try testing.expect(!failing_state.has_induced_failure);
 }
 
-test "ensureUnusedCapacity overflow" {
+test "capacity overflow" {
     var failing_state = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
     const allocator = failing_state.allocator();
     var list: SegmentedList(u32, 1) = .empty;
@@ -236,6 +252,12 @@ test "ensureUnusedCapacity overflow" {
     try testing.expectError(
         error.OutOfMemory,
         list.ensureUnusedCapacity(allocator, std.math.maxInt(usize)),
+    );
+    var bytes: SegmentedList(u8, 0) = .empty;
+    defer bytes.deinit(allocator);
+    try testing.expectError(
+        error.OutOfMemory,
+        bytes.ensureTotalCapacity(allocator, std.math.maxInt(usize)),
     );
     try testing.expect(!failing_state.has_induced_failure);
     try testing.expectEqual(@as(usize, 1), list.len);
@@ -250,10 +272,7 @@ test "ensureTotalCapacity allocation failure" {
     defer list.deinit(allocator);
     list.appendSliceAssumeCapacity(&.{ 0, 1, 2, 3 });
 
-    try testing.expectError(
-        error.OutOfMemory,
-        list.ensureTotalCapacity(allocator, std.math.maxInt(usize)),
-    );
+    try testing.expectError(error.OutOfMemory, list.ensureTotalCapacity(allocator, 5));
     try testing.expect(failing_state.has_induced_failure);
     try testing.expectEqual(@as(usize, 4), list.len);
     try testing.expectEqual(@as(usize, 4), list.capacity());
@@ -389,22 +408,26 @@ fn retained_directory_failure_case(relative_failure_index: usize) !bool {
     const allocator = failing_state.allocator();
     var list: SegmentedList(u32, 0) = .empty;
     defer list.deinit(allocator);
-    for (0..31) |index| try list.append(allocator, @intCast(index));
-    list.shrinkAndFree(allocator, 3);
+    const retained_len = first_segment_size(u32, 0);
+    for (0..(7 * retained_len)) |index| try list.append(allocator, @intCast(index));
+    list.shrinkAndFree(allocator, retained_len);
+    const retained_capacity = list.capacity();
 
     const allocated_before = failing_state.allocated_bytes;
     const freed_before = failing_state.freed_bytes;
     failing_state.fail_index = failing_state.alloc_index + relative_failure_index;
-    list.ensureTotalCapacity(allocator, 15) catch |err| {
+    list.ensureTotalCapacity(allocator, 7 * retained_capacity) catch |err| {
         try testing.expectEqual(error.OutOfMemory, err);
         try testing.expect(failing_state.has_induced_failure);
-        try testing.expectEqual(@as(usize, 3), list.capacity());
+        try testing.expectEqual(retained_capacity, list.capacity());
         const allocated_during_growth = failing_state.allocated_bytes - allocated_before;
         const freed_during_growth = failing_state.freed_bytes - freed_before;
         try testing.expectEqual(allocated_during_growth, freed_during_growth);
-        for (0..3) |index| try testing.expectEqual(@as(u32, @intCast(index)), list.at(index).*);
+        for (0..retained_len) |index| {
+            try testing.expectEqual(@as(u32, @intCast(index)), list.at(index).*);
+        }
         return false;
     };
-    try testing.expectEqual(@as(usize, 15), list.capacity());
+    try testing.expectEqual(7 * retained_capacity, list.capacity());
     return true;
 }
