@@ -22,16 +22,51 @@ test "fuzz operations against ArrayList" {
     try testing.fuzz({}, fuzz_operations, .{});
 }
 
-fn fuzz_operations(_: void, smith: *testing.Smith) !void {
-    switch (smith.value(InlineCapacity)) {
-        .zero => try fuzz_list(0, smith),
-        .one => try fuzz_list(1, smith),
-        .four => try fuzz_list(4, smith),
-        .sixteen => try fuzz_list(16, smith),
+test "operations match ArrayList" {
+    for (0..256) |seed| {
+        var generator = std.Random.DefaultPrng.init(seed);
+        var smith: SeededSmith = .{ .random = generator.random() };
+        try check_operations(&smith);
     }
 }
 
-fn fuzz_list(comptime inline_capacity: usize, smith: *testing.Smith) !void {
+/// Chooses operations from a seeded generator instead of fuzzer input.
+const SeededSmith = struct {
+    random: std.Random,
+
+    fn value(self: SeededSmith, comptime T: type) T {
+        if (@typeInfo(T) == .@"enum") return self.random.enumValue(T);
+        return self.random.int(T);
+    }
+
+    fn index(self: SeededSmith, len: usize) usize {
+        return self.random.uintLessThan(usize, len);
+    }
+
+    fn valueRangeAtMost(self: SeededSmith, comptime T: type, at_least: T, at_most: T) T {
+        return self.random.intRangeAtMost(T, at_least, at_most);
+    }
+
+    // Full sequences also check every shorter prefix.
+    fn eosWeightedSimple(_: SeededSmith, _: u64, _: u64) bool {
+        return false;
+    }
+};
+
+fn fuzz_operations(_: void, smith: *testing.Smith) !void {
+    try check_operations(smith);
+}
+
+fn check_operations(smith: anytype) !void {
+    switch (smith.value(InlineCapacity)) {
+        .zero => try check_list(0, smith),
+        .one => try check_list(1, smith),
+        .four => try check_list(4, smith),
+        .sixteen => try check_list(16, smith),
+    }
+}
+
+fn check_list(comptime inline_capacity: usize, smith: anytype) !void {
     var list: SegmentedList(u32, inline_capacity) = .empty;
     defer list.deinit(testing.allocator);
     var expected: std.ArrayList(u32) = .empty;
@@ -51,7 +86,7 @@ fn apply_operation(
     list: anytype,
     expected: *std.ArrayList(u32),
     addresses: *std.ArrayList(usize),
-    smith: *testing.Smith,
+    smith: anytype,
     next_item: *u32,
 ) !void {
     switch (smith.value(Operation)) {
@@ -105,7 +140,7 @@ fn append_slice(
     list: anytype,
     expected: *std.ArrayList(u32),
     addresses: *std.ArrayList(usize),
-    smith: *testing.Smith,
+    smith: anytype,
     next_item: *u32,
 ) !void {
     var buffer: [std.math.maxInt(u3)]u32 = undefined;
@@ -126,7 +161,7 @@ fn resize(
     list: anytype,
     expected: *std.ArrayList(u32),
     addresses: *std.ArrayList(usize),
-    smith: *testing.Smith,
+    smith: anytype,
     next_item: *u32,
 ) !void {
     const old_len = list.len;
